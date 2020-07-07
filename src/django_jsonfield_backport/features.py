@@ -1,34 +1,17 @@
 import functools
 import json
 
+import django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
-from django.db.backends.base.features import BaseDatabaseFeatures
 from django.db.backends.signals import connection_created
-from django.db.backends.sqlite3.base import DatabaseFeatures as BaseSQLiteFeatures, none_guard
+from django.db.backends.sqlite3.base import none_guard
 from django.db.utils import OperationalError
 from django.dispatch import receiver
-from django.utils.functional import cached_property
 from django.utils.version import PY38
 
-try:
-    from django.db.backends.mysql.base import DatabaseFeatures as BaseMySQLFeatures
-except ImproperlyConfigured:
-    BaseMySQLFeatures = BaseDatabaseFeatures
 
-try:
-    from django.db.backends.oracle.base import DatabaseFeatures as BaseOracleFeatures
-except ImproperlyConfigured:
-    BaseOracleFeatures = BaseDatabaseFeatures
-
-try:
-    from django.db.backends.postgresql.base import DatabaseFeatures as BasePostgresFeatures
-except ImproperlyConfigured:
-    BasePostgresFeatures = BaseDatabaseFeatures
-
-
-class MySQLFeatures(BaseMySQLFeatures):
-    @cached_property
+class MySQLFeatures:
     def supports_json_field(self):
         if self.connection.mysql_is_mariadb:
             return self.connection.mysql_version >= (10, 2, 7)
@@ -39,22 +22,21 @@ class MySQLFeatures(BaseMySQLFeatures):
     has_json_operators = False
 
 
-class OracleFeatures(BaseOracleFeatures):
+class OracleFeatures:
     supports_json_field = True
     supports_primitives_in_json_field = False
     has_native_json_field = False
     has_json_operators = False
 
 
-class PostgresFeatures(BasePostgresFeatures):
+class PostgresFeatures:
     supports_json_field = True
     supports_primitives_in_json_field = True
     has_native_json_field = True
     has_json_operators = True
 
 
-class SQLiteFeatures(BaseSQLiteFeatures):
-    @cached_property
+class SQLiteFeatures:
     def supports_json_field(self):
         try:
             with self.connection.cursor() as cursor, transaction.atomic():
@@ -68,12 +50,31 @@ class SQLiteFeatures(BaseSQLiteFeatures):
     has_json_operators = False
 
 
-features = {
+feature_classes = {
     "mysql": MySQLFeatures,
     "oracle": OracleFeatures,
     "postgresql": PostgresFeatures,
     "sqlite": SQLiteFeatures,
 }
+
+
+feature_names = [
+    "supports_json_field",
+    "supports_primitives_in_json_field",
+    "has_native_json_field",
+    "has_json_operators",
+]
+
+
+@receiver(connection_created)
+def extend_features(connection=None, **kwargs):
+    if django.VERSION >= (3, 1):
+        return
+    for name in feature_names:
+        value = feature = getattr(feature_classes[connection.vendor], name)
+        if callable(feature):
+            value = feature(connection.features)
+        setattr(connection.features, name, value)
 
 
 @none_guard
